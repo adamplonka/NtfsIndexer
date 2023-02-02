@@ -3,7 +3,7 @@
 public class MftScanner
 {
     private readonly IDictionary<long, FolderFrnWithName> folders = new Dictionary<long, FolderFrnWithName>();
-    private readonly IDictionary<long, List<Win32.UsnRecord>> orphansByParentId = new Dictionary<long, List<Win32.UsnRecord>>();
+    private readonly IDictionary<long, List<UsnRecord>> orphansByParentId = new Dictionary<long, List<UsnRecord>>();
     private const int RecursionLimit = 200;
 
     private readonly MftReader reader;
@@ -44,7 +44,7 @@ public class MftScanner
     /// Checks if the entity is attached all way up to the parent.
     /// </summary>
     /// <returns>True if we know the parent folder and it's not orphaned itself</returns>
-    private bool IsAttachedToRoot(Win32.UsnRecord info)
+    private bool IsAttachedToRoot(UsnRecord info)
     {
         return folders.TryGetValue(info.ParentFileReferenceNumber, out var parent)
                && !orphansByParentId.ContainsKey(parent.ParentFrn);
@@ -54,11 +54,11 @@ public class MftScanner
     /// Adds orphaned entity to the ID of parent that is not yet known.
     /// Those children will be flushed along with the parent once it's available.
     /// </summary>
-    private void AddOrphanedChild(Win32.UsnRecord info)
+    private void AddOrphanedChild(UsnRecord info)
     {
         if (!orphansByParentId.TryGetValue(info.ParentFileReferenceNumber, out var orphans))
         {
-            orphans = new List<Win32.UsnRecord>(1);
+            orphans = new List<UsnRecord>(1);
             orphansByParentId[info.ParentFileReferenceNumber] = orphans;
         }
 
@@ -74,7 +74,7 @@ public class MftScanner
         return info.FullName ??= GetFullName(folders[info.ParentFrn], limit - 1) + "\\" + info.Name;
     }
 
-    public string GetFullName(Win32.UsnRecord usnRecord)
+    public string GetFullName(UsnRecord usnRecord)
     {
         return GetFullName(folders[usnRecord.ParentFileReferenceNumber]) + "\\" + usnRecord.FileName;
     }
@@ -82,7 +82,7 @@ public class MftScanner
     /// <summary>
     /// Enumerates item with all its formerly orphaned children
     /// </summary>
-    private IEnumerable<string> FlushWithChildren(Win32.UsnRecord info, int limit = RecursionLimit)
+    private IEnumerable<string> FlushWithChildren(UsnRecord info, int limit = RecursionLimit)
     {
         yield return GetFullName(info);
 

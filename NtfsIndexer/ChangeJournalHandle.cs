@@ -1,14 +1,14 @@
 ﻿using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.Win32.SafeHandles;
+using Windows.Win32;
 
 namespace ChangeJournal;
 
-public class ChangeJournalHandle : SafeHandleMinusOneIsInvalid
+public partial class ChangeJournalHandle : SafeHandleMinusOneIsInvalid
 {
-
-    [DllImport("kernel32", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern IntPtr CreateFileW(
+    [LibraryImport("kernel32", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
+    internal static partial IntPtr CreateFileW(
         [MarshalAs(UnmanagedType.LPWStr)]
         string FileName,
         int DesiredAccess,
@@ -19,25 +19,10 @@ public class ChangeJournalHandle : SafeHandleMinusOneIsInvalid
         IntPtr hTemplateFile
     );
 
-    [DllImport("kernel32", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern int GetVolumeInformationByHandleW(
-        IntPtr hFile,
-        StringBuilder lpVolumeNameBuffer,
-        int nVolumeNameSize,
-        out int lpVolumeSerialNumber,
-        out int
-            lpMaximumComponentLength,
-        out int lpFileSystemFlags,
-        StringBuilder lpFileSystemNameBuffer,
-        int nFileSystemNameSize
-    );
-
-
-
-    [DllImport("kernel32", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern int DeviceIoControl(
+    [LibraryImport("kernel32", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
+    private static partial int DeviceIoControl(
         IntPtr hDevice,
-        int dwIoControlCode,
+        uint dwIoControlCode,
         IntPtr lpInBuffer,
         int nInBufferSize,
         IntPtr lpOutBuffer,
@@ -54,7 +39,7 @@ public class ChangeJournalHandle : SafeHandleMinusOneIsInvalid
     [DllImport("kernel32", SetLastError = true)]
     private static extern IntPtr OpenFileById(
         IntPtr hFile,
-        ref FILE_ID_DESCRIPTOR lpFileID,
+        ref Windows.Win32.Storage.FileSystem.FILE_ID_DESCRIPTOR lpFileID,
         int dwDesiredAccess,
         FileShare dwShareMode,
         IntPtr lpSecurityAttributes,
@@ -69,7 +54,7 @@ public class ChangeJournalHandle : SafeHandleMinusOneIsInvalid
         int dwFlags
     );
 
-    [StructLayout(LayoutKind.Explicit)]
+    /*[StructLayout(LayoutKind.Explicit)]
     public struct FILE_ID_DESCRIPTOR
     {
         [FieldOffset(0)]
@@ -82,7 +67,7 @@ public class ChangeJournalHandle : SafeHandleMinusOneIsInvalid
         public Guid ObjectId;
         [FieldOffset(8)]
         public Guid ExtendedFileId; //Use for ReFS; need to use v3 structures or later instead of v2 as done in this sample
-    }
+    }*/
 
     public static int CTL_CODE(int DeviceType, int Function, int Method, int Access)
     {
@@ -109,15 +94,6 @@ public class ChangeJournalHandle : SafeHandleMinusOneIsInvalid
     public const int METHOD_OUT_DIRECT = 2;
     public const int METHOD_NEITHER = 3;
     public const int FILE_ANY_ACCESS = 0;
-
-    public static int FSCTL_READ_USN_JOURNAL = CTL_CODE(FILE_DEVICE_FILE_SYSTEM, 46, METHOD_NEITHER, FILE_ANY_ACCESS);
-    public static int FSCTL_ENUM_USN_DATA = CTL_CODE(FILE_DEVICE_FILE_SYSTEM, 44, METHOD_NEITHER, FILE_ANY_ACCESS);
-    public static int FSCTL_CREATE_USN_JOURNAL = CTL_CODE(FILE_DEVICE_FILE_SYSTEM, 57, METHOD_NEITHER, FILE_ANY_ACCESS);
-    public static int FSCTL_READ_FILE_USN_DATA = CTL_CODE(FILE_DEVICE_FILE_SYSTEM, 58, METHOD_NEITHER, FILE_ANY_ACCESS);
-    public static int FSCTL_QUERY_USN_JOURNAL = CTL_CODE(FILE_DEVICE_FILE_SYSTEM, 61, METHOD_BUFFERED, FILE_ANY_ACCESS);
-    public static int FSCTL_DELETE_USN_JOURNAL = CTL_CODE(FILE_DEVICE_FILE_SYSTEM, 62, METHOD_BUFFERED, FILE_ANY_ACCESS);
-    public static int FSCTL_WRITE_USN_REASON = CTL_CODE(FILE_DEVICE_FILE_SYSTEM, 180, METHOD_BUFFERED, FILE_ANY_ACCESS);
-    public static int FSCTL_USN_TRACK_MODIFIED_RANGES = CTL_CODE(FILE_DEVICE_FILE_SYSTEM, 189, METHOD_BUFFERED, FILE_ANY_ACCESS);
 
     [StructLayout(LayoutKind.Sequential)]
     public struct USN
@@ -206,8 +182,8 @@ public class ChangeJournalHandle : SafeHandleMinusOneIsInvalid
 
     public class UsnRecordV2WithName
     {
-        public USN_RECORD_V3 Record { get; set; }
-        public string Filename { get; set; }
+        public required USN_RECORD_V3 Record { get; set; }
+        public required string Filename { get; set; }
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -426,7 +402,7 @@ public class ChangeJournalHandle : SafeHandleMinusOneIsInvalid
             rdata.ReturnOnlyOnClose = value ? 1 : 0;
         }
     }
-    private ReaderWriterLockSlim readBufferLock = new ReaderWriterLockSlim();
+    private readonly ReaderWriterLockSlim readBufferLock = new ReaderWriterLockSlim();
 
     private const int DefaultBufferSize = 8192;
     private int readBufferSize;
@@ -456,8 +432,8 @@ public class ChangeJournalHandle : SafeHandleMinusOneIsInvalid
         {
             if (value > 0)
             {
-                readBuffer = readBuffer == IntPtr.Zero 
-                    ? Marshal.AllocHGlobal(value) 
+                readBuffer = readBuffer == IntPtr.Zero
+                    ? Marshal.AllocHGlobal(value)
                     : Marshal.ReAllocHGlobal(readBuffer, (IntPtr)value);
             }
             readBufferSize = value;
@@ -469,8 +445,8 @@ public class ChangeJournalHandle : SafeHandleMinusOneIsInvalid
         }
     }
 
-    public event Action<ChangeJournalHandle, UsnRecordV2WithName> OnChange;
-    public event Action<ChangeJournalHandle, Exception> OnError;
+    public event Action<ChangeJournalHandle, UsnRecordV2WithName>? OnChange;
+    public event Action<ChangeJournalHandle, Exception>? OnError;
 
     private bool shouldRun;
 
@@ -497,7 +473,7 @@ public class ChangeJournalHandle : SafeHandleMinusOneIsInvalid
         try
         {
             int bufSizeOut;
-            var result = DeviceIoControl(handle, FSCTL_CREATE_USN_JOURNAL, buffer, size, IntPtr.Zero, 0, out bufSizeOut, IntPtr.Zero);
+            var result = DeviceIoControl(handle, Windows.Win32.PInvoke.FSCTL_CREATE_USN_JOURNAL, buffer, size, IntPtr.Zero, 0, out bufSizeOut, IntPtr.Zero);
             if (result == 0)
             {
                 ReportLastError();
@@ -520,7 +496,7 @@ public class ChangeJournalHandle : SafeHandleMinusOneIsInvalid
         var buffer = Marshal.AllocHGlobal(size);
         try
         {
-            var result = DeviceIoControl(handle, FSCTL_CREATE_USN_JOURNAL, buffer, size, IntPtr.Zero, 0, out _, IntPtr.Zero);
+            var result = DeviceIoControl(handle, PInvoke.FSCTL_CREATE_USN_JOURNAL, buffer, size, IntPtr.Zero, 0, out _, IntPtr.Zero);
             if (result == 0)
             {
                 Marshal.ThrowExceptionForHR(Marshal.GetHRForLastWin32Error());
@@ -538,7 +514,7 @@ public class ChangeJournalHandle : SafeHandleMinusOneIsInvalid
         var buffer = Marshal.AllocHGlobal(size);
         try
         {
-            var result = DeviceIoControl(handle, FSCTL_QUERY_USN_JOURNAL, IntPtr.Zero, 0, buffer, size, out _, IntPtr.Zero);
+            var result = DeviceIoControl(handle, PInvoke.FSCTL_QUERY_USN_JOURNAL, IntPtr.Zero, 0, buffer, size, out _, IntPtr.Zero);
             if (result == 0)
             {
                 ReportLastError();
@@ -560,7 +536,7 @@ public class ChangeJournalHandle : SafeHandleMinusOneIsInvalid
         try
         {
             Marshal.StructureToPtr(d, buffer, false);
-            if (DeviceIoControl(handle, FSCTL_DELETE_USN_JOURNAL, buffer, size, IntPtr.Zero, 0, out size, IntPtr.Zero) == 0)
+            if (DeviceIoControl(handle, PInvoke.FSCTL_DELETE_USN_JOURNAL, buffer, size, IntPtr.Zero, 0, out size, IntPtr.Zero) == 0)
             {
                 ReportLastError();
                 return false;
@@ -585,7 +561,7 @@ public class ChangeJournalHandle : SafeHandleMinusOneIsInvalid
         try
         {
             Marshal.StructureToPtr(d, buffer, false);
-            if (DeviceIoControl(handle, FSCTL_DELETE_USN_JOURNAL, buffer, size, IntPtr.Zero, 0, out size, IntPtr.Zero) == 0)
+            if (DeviceIoControl(handle, PInvoke.FSCTL_DELETE_USN_JOURNAL, buffer, size, IntPtr.Zero, 0, out size, IntPtr.Zero) == 0)
             {
                 ReportLastError();
                 return false;
@@ -609,7 +585,7 @@ public class ChangeJournalHandle : SafeHandleMinusOneIsInvalid
                 var buffer = Marshal.AllocHGlobal(size);
                 try
                 {
-                    var result = DeviceIoControl(handle, FSCTL_QUERY_USN_JOURNAL, IntPtr.Zero, 0, buffer, size, out _, IntPtr.Zero);
+                    var result = DeviceIoControl(handle, PInvoke.FSCTL_QUERY_USN_JOURNAL, IntPtr.Zero, 0, buffer, size, out _, IntPtr.Zero);
                     if (result == 0)
                     {
                         ReportLastError();
@@ -631,7 +607,7 @@ public class ChangeJournalHandle : SafeHandleMinusOneIsInvalid
                 try
                 {
                     Marshal.StructureToPtr(d, buffer, false);
-                    if (DeviceIoControl(handle, FSCTL_DELETE_USN_JOURNAL, buffer, size, IntPtr.Zero, 0, out size, IntPtr.Zero) == 0)
+                    if (DeviceIoControl(handle, PInvoke.FSCTL_DELETE_USN_JOURNAL, buffer, size, IntPtr.Zero, 0, out size, IntPtr.Zero) == 0)
                     {
                         ReportLastError();
                         break;
@@ -656,11 +632,8 @@ public class ChangeJournalHandle : SafeHandleMinusOneIsInvalid
             shouldRun = false;
             if (thread != null)
             {
-                if (!thread.Join(timeout))
-                {
-                    thread.Abort();
-                }
-                thread = null;
+                thread.Join(timeout);
+                thread = null!;
             }
         }
     }
@@ -669,8 +642,9 @@ public class ChangeJournalHandle : SafeHandleMinusOneIsInvalid
     {
         try
         {
-            var fid = new FILE_ID_DESCRIPTOR {FileId = id};
-            fid.Size = Marshal.SizeOf(fid);
+            var fid = new Windows.Win32.Storage.FileSystem.FILE_ID_DESCRIPTOR();
+            fid.Anonymous.FileId = id;
+            fid.dwSize = (uint)Marshal.SizeOf(fid);
             var h = OpenFileById(handle, ref fid, 0x80, FileShare.ReadWrite | FileShare.Delete, IntPtr.Zero, 0);
             if (h == new IntPtr(-1))
             {
@@ -707,13 +681,13 @@ public class ChangeJournalHandle : SafeHandleMinusOneIsInvalid
         try
         {
             int outSize;
-            var result = DeviceIoControl(handle, FSCTL_QUERY_USN_JOURNAL, IntPtr.Zero, 0, buffer, size, out outSize,
+            var result = DeviceIoControl(handle, PInvoke.FSCTL_QUERY_USN_JOURNAL, IntPtr.Zero, 0, buffer, size, out outSize,
                 IntPtr.Zero);
             if (result == 0)
             {
                 if (TryCreateJournal())
                 {
-                    result = DeviceIoControl(handle, FSCTL_QUERY_USN_JOURNAL, IntPtr.Zero, 0, buffer, size,
+                    result = DeviceIoControl(handle, PInvoke.FSCTL_QUERY_USN_JOURNAL, IntPtr.Zero, 0, buffer, size,
                         out outSize, IntPtr.Zero);
                 }
                 if (result == 0) ReportLastError();
@@ -730,7 +704,7 @@ public class ChangeJournalHandle : SafeHandleMinusOneIsInvalid
                            | UsnReasonType.USN_REASON_RENAME_OLD_NAME | UsnReasonType.USN_REASON_RENAME_NEW_NAME
                            | UsnReasonType.USN_REASON_REPARSE_POINT_CHANGE
                            | UsnReasonType.USN_REASON_HARD_LINK_CHANGE);
-    //rdata.ReturnOnlyOnClose = 1;
+        //rdata.ReturnOnlyOnClose = 1;
 
         rdata.MinMajorVersion = 2;
         rdata.MaxMajorVersion = 3;
@@ -761,7 +735,7 @@ public class ChangeJournalHandle : SafeHandleMinusOneIsInvalid
                 readBufferLock.EnterReadLock();
                 try
                 {
-                    var result = DeviceIoControl(handle, FSCTL_READ_USN_JOURNAL, buffer, size, readBuffer, readBufferSize, out var outSize, IntPtr.Zero);
+                    var result = DeviceIoControl(handle, PInvoke.FSCTL_READ_USN_JOURNAL, buffer, size, readBuffer, readBufferSize, out var outSize, IntPtr.Zero);
                     if (result > 0 && outSize > usize)
                     {
                         var usn = Marshal.PtrToStructure<USN>(readBuffer);
@@ -806,26 +780,22 @@ public class ChangeJournalHandle : SafeHandleMinusOneIsInvalid
 
     void ReportChange(UsnRecordV2WithName record)
     {
-        if (OnChange != null)
-        {
-            OnChange(this, record);
-        }
+        OnChange?.Invoke(this, record);
     }
 
     void ReportLastError()
     {
-        ReportException(Marshal.GetExceptionForHR(Marshal.GetHRForLastWin32Error()));
+        var ex = Marshal.GetExceptionForHR(Marshal.GetHRForLastWin32Error());
+        if (ex != null)
+        {
+            ReportException(ex);
+        }
     }
 
     void ReportException(Exception ex)
     {
-        if (OnError != null)
-        {
-            OnError(this, ex);
-        }
+        OnError?.Invoke(this, ex);
     }
-
-
 
     private static void Cjh_OnError(ChangeJournalHandle arg1, Exception arg2)
     {
@@ -844,21 +814,20 @@ public class ChangeJournalHandle : SafeHandleMinusOneIsInvalid
         Console.Write(":\t");
         Console.WriteLine(((UsnReasonType)arg2.Record.Reason).ToString());
     }
+
     public static List<UsnRecordV2WithName> Run()
     {
         var pathToVolumeToMonitor = @"\\?\C:";
         //This will filter to show only files that are deleted or created
         var reasonsToMonitor = UsnReasonType.USN_REASON_FILE_CREATE | UsnReasonType.USN_REASON_FILE_DELETE;
-        using (var cjh = new ChangeJournalHandle(pathToVolumeToMonitor))
-        {
-            //                cjh.OnChange += Cjh_OnChange;
-            //cjh.OnError += Cjh_OnError;
-            //cjh.EventTriggerMask = reasonsToMonitor;
+        using var cjh = new ChangeJournalHandle(pathToVolumeToMonitor);
+        cjh.OnChange += Cjh_OnChange;
+        cjh.OnError += Cjh_OnError;
+        cjh.EventTriggerMask = reasonsToMonitor;
 
-            return cjh.ListenProc().ToList();
+        return cjh.ListenProc().ToList();
 
-            //                cjh.OnChange -= Cjh_OnChange;
-            //cjh.OnError -= Cjh_OnError;
-        }
+        cjh.OnChange -= Cjh_OnChange;
+        cjh.OnError -= Cjh_OnError;
     }
 }
