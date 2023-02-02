@@ -2,8 +2,8 @@
 
 public class MftScanner
 {
-    private readonly IDictionary<long, FolderFrnWithName> folders = new Dictionary<long, FolderFrnWithName>();
-    private readonly IDictionary<long, List<UsnRecord>> orphansByParentId = new Dictionary<long, List<UsnRecord>>();
+    private readonly IDictionary<Guid, FolderFrnWithName> folders = new Dictionary<Guid, FolderFrnWithName>();
+    private readonly IDictionary<Guid, List<UsnRecord>> orphansByParentId = new Dictionary<Guid, List<UsnRecord>>();
     private const int RecursionLimit = 200;
 
     private readonly MftReader reader;
@@ -22,11 +22,11 @@ public class MftScanner
         {
             if (info.FileAttributes.HasFlag(FileAttributes.Directory))
             {
-                folders[info.FileReferenceNumber] = new FolderFrnWithName
+                folders[info.Guid] = new FolderFrnWithName
                 {
-                    FileReferenceNumber = info.FileReferenceNumber,
+                    FileReferenceNumber = info.Guid,
                     Name = info.FileName,
-                    ParentFrn = info.ParentFileReferenceNumber
+                    ParentFrn = info.ParentGuid
                 };
             }
 
@@ -36,7 +36,9 @@ public class MftScanner
                     yield return name;
             }
             else
+            {
                 AddOrphanedChild(info);
+            }
         }
     }
 
@@ -46,7 +48,7 @@ public class MftScanner
     /// <returns>True if we know the parent folder and it's not orphaned itself</returns>
     private bool IsAttachedToRoot(UsnRecord info)
     {
-        return folders.TryGetValue(info.ParentFileReferenceNumber, out var parent)
+        return folders.TryGetValue(info.ParentGuid, out var parent)
                && !orphansByParentId.ContainsKey(parent.ParentFrn);
     }
 
@@ -56,10 +58,10 @@ public class MftScanner
     /// </summary>
     private void AddOrphanedChild(UsnRecord info)
     {
-        if (!orphansByParentId.TryGetValue(info.ParentFileReferenceNumber, out var orphans))
+        if (!orphansByParentId.TryGetValue(info.ParentGuid, out var orphans))
         {
             orphans = new List<UsnRecord>(1);
-            orphansByParentId[info.ParentFileReferenceNumber] = orphans;
+            orphansByParentId[info.ParentGuid] = orphans;
         }
 
         orphans.Add(info);
@@ -74,9 +76,9 @@ public class MftScanner
         return info.FullName ??= GetFullName(folders[info.ParentFrn], limit - 1) + "\\" + info.Name;
     }
 
-    public string GetFullName(UsnRecord usnRecord)
+    private string GetFullName(UsnRecord usnRecord)
     {
-        return GetFullName(folders[usnRecord.ParentFileReferenceNumber]) + "\\" + usnRecord.FileName;
+        return GetFullName(folders[usnRecord.ParentGuid]) + "\\" + usnRecord.FileName;
     }
 
     /// <summary>
@@ -86,9 +88,9 @@ public class MftScanner
     {
         yield return GetFullName(info);
 
-        if (limit > 0 && orphansByParentId.TryGetValue(info.FileReferenceNumber, out var children))
+        if (limit > 0 && orphansByParentId.TryGetValue(info.Guid, out var children))
         {
-            orphansByParentId.Remove(info.FileReferenceNumber); // adopted
+            orphansByParentId.Remove(info.Guid); // adopted
             foreach (var child in children)
                 foreach (var childName in FlushWithChildren(child, limit - 1))
                     yield return childName;
@@ -99,8 +101,8 @@ public class MftScanner
 
 public class FolderFrnWithName
 {
-    public long FileReferenceNumber;
-    public long ParentFrn;
+    public Guid FileReferenceNumber;
+    public Guid ParentFrn;
     public string? Name;
     public string? FullName;
 }

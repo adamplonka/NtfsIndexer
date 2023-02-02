@@ -10,15 +10,17 @@ namespace NtfsIndexer;
 
 public class MftReader
 {
-    public IEnumerable<UsnRecord> EnumerateVolume(string drive)
+    internal IEnumerable<UsnRecord> EnumerateVolume(string drive)
     {
         using var volumeRootHandle = GetRootHandle(drive);
+        var start = Stopwatch.GetTimestamp();
         CreateChangeJournal(volumeRootHandle);
+        Console.WriteLine("Created journal in " + Stopwatch.GetElapsedTime(start));
         foreach (var entry in EnumerateFiles(volumeRootHandle))
             yield return entry;
     }
 
-    public long GetRootFrnEntry(string drive)
+    public Guid GetRootFrnEntry(string drive)
     {
         var driveRoot = @"\\.\" + drive + @"\";
         using var hRoot = PInvoke.CreateFile(driveRoot,
@@ -33,11 +35,9 @@ public class MftReader
             throw new Win32Exception(Marshal.GetLastWin32Error(), "Unable to get root frn entry");
         }
 
-        if (PInvoke.GetFileInformationByHandle(hRoot, out var fi))
+        if (Win32.GetFileInformationByHandleEx(hRoot, FILE_INFO_BY_HANDLE_CLASS.FileIdInfo, out var fi, (uint)Marshal.SizeOf<FILE_ID_INFO>()))
         {
-            var indexRoot = ((long)fi.nFileIndexHigh << 32) | fi.nFileIndexLow;
-
-            return indexRoot;
+            return new Guid(fi.FileId.Identifier.AsReadOnlySpan());
         }
 
         throw new Win32Exception(Marshal.GetLastWin32Error(),
@@ -81,7 +81,7 @@ public class MftReader
             LowUsn = 0,
             HighUsn = long.MaxValue,
             MinMajorVersion = 2,
-            MaxMajorVersion = 2
+            MaxMajorVersion = 4
         };
 
         var sizeOfBuffer = 0x1000 + sizeof(ulong);
@@ -96,7 +96,7 @@ public class MftReader
                 var offset = sizeof(long);
                 while (offset < outBytesReturned)
                 {
-                    var usn = new UsnRecord(pData, offset);
+                    var usn = UsnRecord.Create(pData, offset);
                     if (usn.FileAttributes.HasFlag(FileAttributes.ReparsePoint))
                     {
                         symLinks.Add(usn);
@@ -126,8 +126,7 @@ public class MftReader
         {
             foreach (var usn in symLinks)
             {
-                var fileDescriptor = new FILE_ID_DESCRIPTOR();
-                fileDescriptor.Anonymous.FileId = usn.FileReferenceNumber;
+                var fileDescriptor = usn.CreateFileIdDescriptor();
                 using var sfh = PInvoke.OpenFileById(volumeRootHandle, fileDescriptor,
                     FILE_ACCESS_FLAGS.FILE_READ_ATTRIBUTES, FILE_SHARE_MODE.FILE_SHARE_READ | FILE_SHARE_MODE.FILE_SHARE_WRITE | FILE_SHARE_MODE.FILE_SHARE_DELETE, null,
                     FILE_FLAGS_AND_ATTRIBUTES.FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAGS_AND_ATTRIBUTES.FILE_FLAG_OPEN_REPARSE_POINT |

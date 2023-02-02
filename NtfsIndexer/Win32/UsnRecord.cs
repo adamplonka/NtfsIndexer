@@ -1,36 +1,69 @@
 ﻿using System.Runtime.InteropServices;
+using Windows.Win32.System.Ioctl;
+using Windows.Win32.Storage.FileSystem;
 
 namespace NtfsIndexer;
 
-public struct UsnRecord
+internal interface IUsnRecord
 {
-    public uint RecordLength;
-    public short MajorVersion;
-    public short MinorVersion;
-    public long FileReferenceNumber;
-    public long ParentFileReferenceNumber;
-    public FileAttributes FileAttributes;
+    uint RecordLength { get; }
+    FileAttributes FileAttributes { get; }
+    ushort FileNameOffset { get; }
+    ushort FileNameLength { get; }
+    FILE_ID_TYPE FileIdType { get; }
+    FILE_ID_DESCRIPTOR._Anonymous_e__Union FileIdentifier { get; }
+    FILE_ID_DESCRIPTOR._Anonymous_e__Union ParentFileIdentifier { get; }
+}
 
-    public int FileNameLength;
-    public int FileNameOffset;
-    public string FileName;
+internal class UsnRecord
+{
+    private static readonly uint DescriptorSize;
 
-    private const int FR_OFFSET = 8;
-    private const int PFR_OFFSET = 16;
-    private const int FA_OFFSET = 52;
-    private const int FNL_OFFSET = 56;
-    private const int FN_OFFSET = 58;
+    public FileAttributes FileAttributes { get; init; }
+    public uint RecordLength { get; init; }
+    public string FileName { get; init; }
+    public Guid Guid { get; init; }
+    public Guid ParentGuid { get; init; }
+    private FILE_ID_TYPE idType;
 
-    public UsnRecord(IntPtr p, int offset)
+    static UsnRecord()
     {
-        RecordLength = (uint)Marshal.ReadInt32(p, offset);
-        MajorVersion = Marshal.ReadInt16(p, offset + 4);
-        MinorVersion = Marshal.ReadInt16(p, offset + 6);
-        FileReferenceNumber = Marshal.ReadInt64(p, offset + FR_OFFSET);
-        ParentFileReferenceNumber = Marshal.ReadInt64(p, offset + PFR_OFFSET);
-        FileAttributes = (FileAttributes)Marshal.ReadInt32(p, offset + FA_OFFSET);
-        FileNameLength = Marshal.ReadInt16(p, offset + FNL_OFFSET);
-        FileNameOffset = Marshal.ReadInt16(p, offset + FN_OFFSET);
-        FileName = Marshal.PtrToStringUni(IntPtr.Add(p, offset + FileNameOffset), FileNameLength / sizeof(char));
+        DescriptorSize = (uint)Marshal.SizeOf<FILE_ID_DESCRIPTOR>();
+    }
+
+    internal FILE_ID_DESCRIPTOR CreateFileIdDescriptor()
+    {
+        return new FILE_ID_DESCRIPTOR
+        {
+            Type = idType,
+            dwSize = DescriptorSize,
+            Anonymous =
+            {
+                ObjectId = Guid
+            }
+        };
+    }
+
+    public static UsnRecord Create(IntPtr p, int offset)
+    {
+        var commonHeader = Marshal.PtrToStructure<USN_RECORD_COMMON_HEADER>(p + offset);
+        IUsnRecord usnRecord = commonHeader.MajorVersion switch
+        {
+            2 => Marshal.PtrToStructure<USN_RECORD_V2>(p + offset),
+            3 => Marshal.PtrToStructure<USN_RECORD_V3>(p + offset),
+            _ => throw new NotSupportedException($"USN_RECORD Version {commonHeader.MajorVersion}.{commonHeader.MinorVersion} not supported")
+        };
+        var fileName = Marshal.PtrToStringUni(IntPtr.Add(p, offset + usnRecord.FileNameOffset), usnRecord.FileNameLength / sizeof(char));
+        return new UsnRecord(usnRecord, fileName);
+    }
+
+    public UsnRecord(IUsnRecord usnRecord, string fileName)
+    {
+        FileAttributes = usnRecord.FileAttributes;
+        RecordLength = usnRecord.RecordLength;
+        FileName = fileName;
+        idType = usnRecord.FileIdType;
+        Guid = usnRecord.FileIdentifier.ObjectId;
+        ParentGuid = usnRecord.ParentFileIdentifier.ObjectId;
     }
 }
